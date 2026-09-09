@@ -176,6 +176,14 @@
     remainingFood: document.getElementById('remainingFood'),
     daysToSalary: document.getElementById('daysToSalary'),
 
+    // Analytics elements
+    periodSpentLabel: document.getElementById('periodSpentLabel'),
+    periodSpentValue: document.getElementById('periodSpentValue'),
+    periodIncomeLabel: document.getElementById('periodIncomeLabel'),
+    periodIncomeValue: document.getElementById('periodIncomeValue'),
+    debtRecommendText: document.getElementById('debtRecommendText'),
+    periodToggle: document.getElementById('periodToggle'),
+
     // Expense & Chat input form
     expenseForm: document.getElementById('expenseForm'),
     naturalInput: document.getElementById('naturalInput'),
@@ -223,6 +231,84 @@
     return Math.round(amount).toLocaleString('ru-RU');
   }
 
+  let selectedAnalyticsPeriod = 'month';
+
+  function filterTransactionsByPeriod(period) {
+    const now = new Date();
+    return appState.transactions.filter((tx) => {
+      const txDate = new Date(tx.date);
+      if (isNaN(txDate.getTime())) return true;
+
+      if (period === 'today') {
+        return txDate.toDateString() === now.toDateString();
+      } else if (period === 'week') {
+        const weekAgo = new Date(now);
+        weekAgo.setDate(now.getDate() - 7);
+        return txDate >= weekAgo;
+      } else if (period === 'month') {
+        const monthAgo = new Date(now);
+        monthAgo.setDate(now.getDate() - 30);
+        return txDate >= monthAgo;
+      }
+      return true; // 'all'
+    });
+  }
+
+  function renderAnalytics() {
+    if (!elements.periodSpentValue || !elements.debtRecommendText) return;
+
+    const filtered = filterTransactionsByPeriod(selectedAnalyticsPeriod);
+
+    let periodExpenses = 0;
+    let periodIncomes = 0;
+
+    filtered.forEach((tx) => {
+      const amt = Number(tx.amount) || 0;
+      if (tx.category === 'income') {
+        periodIncomes += amt;
+      } else {
+        periodExpenses += amt;
+      }
+    });
+
+    const periodLabels = {
+      today: 'Потрачено за сегодня',
+      week: 'Потрачено за 7 дней',
+      month: 'Потрачено за 30 дней',
+      all: 'Потрачено за всё время'
+    };
+
+    elements.periodSpentLabel.textContent = periodLabels[selectedAnalyticsPeriod] || 'Потрачено';
+    elements.periodSpentValue.textContent = `${formatMoney(periodExpenses)} ₽`;
+    elements.periodIncomeValue.textContent = `+${formatMoney(periodIncomes)} ₽`;
+
+    // Calculate smart debt payoff recommendation:
+    // Formula: Look at balance, days left, and current debt.
+    const currentBalance = Number(appState.currentBalance) || 0;
+    const debt = Number(appState.creditDebt) || 0;
+    const days = Math.max(1, Number(appState.daysSalary) || 1);
+
+    if (debt <= 0) {
+      elements.debtRecommendText.innerHTML = `🎉 У вас <b>нет активного долга</b> по кредитке. Все средства свободны для накоплений и текущих трат!`;
+    } else {
+      // 60% of balance reserved for food/living
+      const foodBudget = currentBalance * 0.6;
+      // Remaining 40% is non-food discretionary
+      const potentialDebtFunds = Math.max(0, currentBalance - foodBudget);
+
+      if (currentBalance <= 0) {
+        elements.debtRecommendText.innerHTML = `⚠️ Баланс на нуле. Рекомендуем сначала закрыть базовые потребности в еде до пополнения.`;
+      } else if (potentialDebtFunds >= debt) {
+        elements.debtRecommendText.innerHTML = `💡 Баланс позволяет <b>полностью закрыть долг ${formatMoney(debt)} ₽</b> прямо сейчас и сохранить ${formatMoney(foodBudget)} ₽ (${Math.round(foodBudget / days)} ₽/день) на еду.`;
+      } else if (potentialDebtFunds > 0) {
+        const recommendPay = Math.round(potentialDebtFunds * 0.7); // 70% of discretionary to debt
+        elements.debtRecommendText.innerHTML = `💡 Рекомендуется внести <b>${formatMoney(recommendPay)} ₽</b> на кредитку. Остаток долга: <b>${formatMoney(debt - recommendPay)} ₽</b>. На еду останется <b>${formatMoney(currentBalance - recommendPay)} ₽</b> (~${Math.round((currentBalance - recommendPay) * 0.6 / days)} ₽/день).`;
+      } else {
+        elements.debtRecommendText.innerHTML = `⚠️ Свободных средств мало (${formatMoney(currentBalance)} ₽ на ${days} дн.). Внесите символические <b>${formatMoney(Math.min(debt, 500))} ₽</b> или минимальный платеж, чтобы не урезать питание.`;
+      }
+    }
+  }
+
   function renderDashboard() {
     const currentBalance = Number(appState.currentBalance) || 0;
     const remainingDebt = Number(appState.creditDebt) || 0;
@@ -262,6 +348,7 @@
       elements.apiKeyBanner.classList.add('hidden');
     }
 
+    renderAnalytics();
     renderTransactions();
   }
 
@@ -687,6 +774,19 @@
       e.preventDefault();
       handleExpenseSubmit();
     });
+
+    // Analytics Period Toggle
+    if (elements.periodToggle) {
+      elements.periodToggle.querySelectorAll('.period-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          elements.periodToggle.querySelectorAll('.period-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedAnalyticsPeriod = btn.getAttribute('data-period') || 'month';
+          renderAnalytics();
+          triggerHaptic('light');
+        });
+      });
+    }
 
     // Close AI response box
     if (elements.closeAiResponseBtn) {

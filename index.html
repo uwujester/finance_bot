@@ -104,6 +104,44 @@
         </div>
       </section>
 
+      <!-- Smart Analytics Card (Expenses by Period & Recommended Debt Payoff) -->
+      <section class="analytics-card">
+        <div class="analytics-header">
+          <div class="analytics-title-group">
+            <span class="analytics-icon">📊</span>
+            <span class="analytics-title">Аналитика расходов и кредитки</span>
+          </div>
+          <div class="period-toggle" id="periodToggle">
+            <button class="period-btn" data-period="today">День</button>
+            <button class="period-btn" data-period="week">Неделя</button>
+            <button class="period-btn active" data-period="month">Месяц</button>
+            <button class="period-btn" data-period="all">Все</button>
+          </div>
+        </div>
+
+        <div class="analytics-stats-row">
+          <div class="analytics-item">
+            <span class="analytics-label" id="periodSpentLabel">Потрачено за месяц</span>
+            <div class="analytics-value expense-total" id="periodSpentValue">0 ₽</div>
+          </div>
+          <div class="analytics-item">
+            <span class="analytics-label" id="periodIncomeLabel">Доходы за период</span>
+            <div class="analytics-value income-total" id="periodIncomeValue">0 ₽</div>
+          </div>
+        </div>
+
+        <!-- Auto Debt Recommendation Widget -->
+        <div class="debt-recommendation-box" id="debtRecommendBox">
+          <div class="debt-rec-icon">⚡</div>
+          <div class="debt-rec-content">
+            <span class="debt-rec-title">Рекомендация на кредитку:</span>
+            <div class="debt-rec-text" id="debtRecommendText">
+              Рассчитываем оптимальную сумму...
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Quick AI Expense & Chat Section -->
       <section class="ai-input-section">
         <div class="section-title">
