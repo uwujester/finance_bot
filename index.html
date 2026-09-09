@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Smart Budget - Telegram Mini App</title>
+  
+  <!-- Telegram WebApp JS SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="app-container">
+    
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="user-greeting">
+        <div class="avatar" id="userAvatar">👤</div>
+        <div>
+          <span class="greeting-sub">Умный бюджет</span>
+          <h2 class="user-name" id="userName">Привет!</h2>
+        </div>
+      </div>
+      <button id="openSettingsBtn" class="icon-button" title="Настройки" aria-label="Настройки">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- API Key Warning Banner (if not set) -->
+    <div id="apiKeyBanner" class="banner hidden">
+      <div class="banner-content">
+        <span class="banner-icon">⚡</span>
+        <span>Укажите <b>API-ключ DeepSeek</b> в настройках для работы ИИ!</span>
+      </div>
+      <button id="bannerSettingsBtn" class="banner-action-btn">Настроить</button>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+
+      <!-- Hero Card: Food Budget Per Day -->
+      <section class="hero-card">
+        <div class="hero-header">
+          <span class="hero-label">Доступно на еду в день</span>
+          <span class="days-pill" id="heroDaysPill">⏳ <span id="daysCountBadge">0</span> дн.</span>
+        </div>
+        <div class="hero-amount">
+          <span id="dailyFoodAmount">0</span> <span class="currency">₽</span>
+        </div>
+        <div class="hero-subtext" id="heroSubtext">
+          Автоматический расчет: (Свободные средства / Дней)
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar" id="foodProgressBar" style="width: 0%;"></div>
+        </div>
+      </section>
+
+      <!-- Stat Cards Grid -->
+      <section class="stats-grid">
+        <!-- Balance Card -->
+        <div class="stat-card balance-card">
+          <div class="stat-icon">💰</div>
+          <div class="stat-info">
+            <span class="stat-title">Текущий баланс</span>
+            <div class="stat-value"><span id="currentBalance">0</span> ₽</div>
+          </div>
+        </div>
+
+        <!-- Credit Debt Card -->
+        <div class="stat-card debt-card">
+          <div class="stat-icon">💳</div>
+          <div class="stat-info">
+            <span class="stat-title">Остаток долга</span>
+            <div class="stat-value"><span id="remainingDebt">0</span> ₽</div>
+          </div>
+        </div>
+
+        <!-- Food Pool Card -->
+        <div class="stat-card food-card">
+          <div class="stat-icon">🍔</div>
+          <div class="stat-info">
+            <span class="stat-title">Остаток на еду</span>
+            <div class="stat-value"><span id="remainingFood">0</span> ₽</div>
+          </div>
+        </div>
+
+        <!-- Days to Payday Card -->
+        <div class="stat-card days-card">
+          <div class="stat-icon">🗓️</div>
+          <div class="stat-info">
+            <span class="stat-title">Дней до ЗП</span>
+            <div class="stat-value"><span id="daysToSalary">0</span> дн.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Quick AI Expense & Chat Section -->
+      <section class="ai-input-section">
+        <div class="section-title">
+          <span>🧠 Умный ввод и Финансовый ИИ-советник</span>
+          <span class="ai-badge" id="currentModelBadge">DeepSeek</span>
+        </div>
+
+        <!-- AI Chat / Answer Display Box (appears when user asks questions or budget calculations) -->
+        <div id="aiResponseBox" class="ai-response-box hidden">
+          <div class="ai-response-header">
+            <div class="ai-avatar-mini">🤖</div>
+            <span class="ai-response-sender">Ответ ИИ-помощника:</span>
+            <button id="closeAiResponseBtn" class="ai-response-close" title="Скрыть">✕</button>
+          </div>
+          <div id="aiResponseText" class="ai-response-text"></div>
+        </div>
+
+        <form id="expenseForm" class="expense-form" onsubmit="return false;">
+          <div class="input-wrapper">
+            <input 
+              type="text" 
+              id="naturalInput" 
+              class="natural-input" 
+              placeholder="Траты ('шаурма 300') или вопрос ('на сколько дней хватит денег?')..." 
+              autocomplete="off"
+              required
+            />
+            <button type="submit" id="sendBtn" class="send-btn" title="Отправить ИИ">
+              <svg id="sendIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+              <div id="loadingSpinner" class="spinner hidden"></div>
+            </button>
+          </div>
+        </form>
+
+        <!-- Quick Hint Tags -->
+        <div class="quick-hints">
+          <button class="hint-tag" data-text="Пришли деньги 10000">💵 Пришли 10к</button>
+          <button class="hint-tag" data-text="Осталось 10 дней до зарплаты">🗓️ Осталось 10 дней</button>
+          <button class="hint-tag" data-text="Обед в столовой 350">🍱 Обед 350</button>
+          <button class="hint-tag" data-text="Супермаркет 1400">🛒 Продукты 1400</button>
+          <button class="hint-tag" data-text="Долг по кредитке 15000">💳 Долг 15000</button>
+          <button class="hint-tag" data-text="На сколько дней мне хватит денег?">📊 Анализ бюджета</button>
+        </div>
+      </section>
+
+      <!-- Recent Transactions Section -->
+      <section class="transactions-section">
+        <div class="section-header">
+          <span class="section-title">История операций</span>
+          <button id="clearHistoryBtn" class="text-btn text-danger">Очистить</button>
+        </div>
+        <div id="transactionsList" class="transactions-list">
+          <!-- Populated dynamically via JS -->
+          <div class="empty-state">
+            <div class="empty-icon">📝</div>
+            <p>Нет операций. Напишите расходы выше, и DeepSeek автоматически их распарсит!</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Settings Modal Drawer (Only AI Configuration) -->
+    <div id="settingsModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">⚙️ Настройки ИИ</h3>
+          <button id="closeSettingsBtn" class="modal-close-btn">&times;</button>
+        </div>
+        
+        <form id="settingsForm" class="settings-form">
+          <div class="form-group">
+            <label for="apiKeyInput">API Key (Любой LLM провайдер) <span class="required">*</span></label>
+            <div class="input-password-wrapper">
+              <input 
+                type="password" 
+                id="apiKeyInput" 
+                placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                autocomplete="off"
+              />
+              <button type="button" id="toggleApiKeyVisibility" class="toggle-pass-btn">👁️</button>
+            </div>
+            <small class="form-hint">Ключ хранится локально в вашем браузере/Telegram Cloud.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="apiPresetSelect">Быстрый выбор провайдера</label>
+            <select id="apiPresetSelect" class="form-select">
+              <option value="deepseek">DeepSeek (api.deepseek.com)</option>
+              <option value="openrouter">OpenRouter (openrouter.ai)</option>
+              <option value="openai">OpenAI (api.openai.com)</option>
+              <option value="groq">Groq (api.groq.com)</option>
+              <option value="custom">Свой URL / Любая модель (Custom Endpoint)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="apiEndpointInput">API Endpoint URL (OpenAI-совместимый /chat/completions)</label>
+            <input 
+              type="url" 
+              id="apiEndpointInput" 
+              placeholder="https://api.deepseek.com/chat/completions"
+              required 
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="apiModelInput">Название модели (Model ID)</label>
+            <input 
+              type="text" 
+              id="apiModelInput" 
+              placeholder="deepseek-chat"
+              required 
+            />
+            <small class="form-hint">Например: <code>deepseek-chat</code>, <code>gpt-4o-mini</code>, <code>llama-3.3-70b-versatile</code>, <code>anthropic/claude-3.5-sonnet</code></small>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="cancelSettingsBtn" class="btn btn-secondary">Отмена</button>
+            <button type="submit" class="btn btn-primary">Сохранить настройки ИИ</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+  </div>
+
+  <!-- Main JavaScript App -->
+  <script src="app.js"></script>
+</body>
+</html>
