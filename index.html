@@ -58,49 +58,21 @@
           <span id="dailyFoodAmount">0</span> <span class="currency">₽</span>
         </div>
         <div class="hero-subtext" id="heroSubtext">
-          Автоматический расчет: (Свободные средства / Дней)
+          ИИ рассчитывает безопасный лимит с учетом дней до зарплаты
         </div>
         <div class="progress-bar-container">
           <div class="progress-bar" id="foodProgressBar" style="width: 0%;"></div>
         </div>
       </section>
 
-      <!-- Stat Cards Grid -->
-      <section class="stats-grid">
-        <!-- Balance Card -->
-        <div class="stat-card balance-card">
-          <div class="stat-icon">💰</div>
-          <div class="stat-info">
-            <span class="stat-title">Текущий баланс</span>
-            <div class="stat-value"><span id="currentBalance">0</span> ₽</div>
-          </div>
+      <!-- Dynamic Financial Cells Container (All in one place) -->
+      <section class="financial-cells-section">
+        <div class="section-title">
+          <span>🏦 Мои финансы</span>
+          <span class="hint-badge" title="Управляйте через ИИ">AI-управление</span>
         </div>
-
-        <!-- Credit Debt Card -->
-        <div class="stat-card debt-card">
-          <div class="stat-icon">💳</div>
-          <div class="stat-info">
-            <span class="stat-title">Остаток долга</span>
-            <div class="stat-value"><span id="remainingDebt">0</span> ₽</div>
-          </div>
-        </div>
-
-        <!-- Food Pool Card -->
-        <div class="stat-card food-card">
-          <div class="stat-icon">🍔</div>
-          <div class="stat-info">
-            <span class="stat-title">Остаток на еду</span>
-            <div class="stat-value"><span id="remainingFood">0</span> ₽</div>
-          </div>
-        </div>
-
-        <!-- Days to Payday Card -->
-        <div class="stat-card days-card">
-          <div class="stat-icon">🗓️</div>
-          <div class="stat-info">
-            <span class="stat-title">Дней до ЗП</span>
-            <div class="stat-value"><span id="daysToSalary">0</span> дн.</div>
-          </div>
+        <div id="cellsContainer" class="cells-container">
+          <!-- Base cells + user cells will be rendered here -->
         </div>
       </section>
 
@@ -267,6 +239,40 @@
             <button type="submit" class="btn btn-primary">Сохранить настройки ИИ</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Cell Action Modal (for Add/Withdraw) -->
+    <div id="cellActionModal" class="modal-overlay hidden">
+      <div class="modal-card cell-action-modal">
+        <div class="modal-header">
+          <h3 class="modal-title" id="cellActionTitle">💰 Пополнить ячейку</h3>
+          <button id="closeCellActionBtn" class="modal-close-btn">&times;</button>
+        </div>
+        
+        <div class="modal-body">
+          <div id="cellActionInfo" class="cell-action-info">
+            <!-- Dynamic info will be inserted here -->
+          </div>
+
+          <div class="form-group">
+            <label for="cellActionAmountInput">Сумма (₽)</label>
+            <input 
+              type="number" 
+              id="cellActionAmountInput" 
+              class="form-input amount-input"
+              placeholder="0"
+              min="0"
+              step="1"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="cancelCellActionBtn" class="btn btn-secondary">Отмена</button>
+            <button type="button" id="confirmCellActionBtn" class="btn btn-primary">Подтвердить</button>
+          </div>
+        </div>
       </div>
     </div>
 

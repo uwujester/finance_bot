@@ -709,6 +709,228 @@ html, body {
   background: rgba(239, 68, 68, 0.1);
 }
 
+/* ==========================================================================
+   Dynamic Financial Cells (Agentic UI)
+   ========================================================================== */
+.financial-cells-section {
+  margin: 20px 0;
+}
+
+.hint-badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: var(--accent-primary);
+  color: white;
+  border-radius: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.cells-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.empty-cells-state {
+  text-align: center;
+  padding: 40px 20px;
+  background: var(--surface-card-subtle);
+  border-radius: var(--radius-md);
+  border: 2px dashed var(--surface-border);
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+.empty-cells-state p {
+  font-size: 14px;
+  color: var(--tg-theme-hint-color);
+  margin: 6px 0;
+}
+
+.hint-text {
+  font-size: 13px;
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.financial-cell {
+  background: var(--surface-card);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-normal);
+  animation: fadeIn 0.3s ease;
+}
+
+.financial-cell.base-cell {
+  background: linear-gradient(135deg, var(--surface-card) 0%, var(--surface-card-subtle) 100%);
+  border-width: 2px;
+}
+
+.financial-cell:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.financial-cell.base-cell:hover {
+  transform: none;
+}
+
+.cells-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 16px 0;
+  position: relative;
+}
+
+.cells-divider::before,
+.cells-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--surface-border);
+}
+
+.cells-divider span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cell-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.cell-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--surface-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+.cell-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cell-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tg-theme-text-color);
+}
+
+.cell-type-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  width: fit-content;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.cell-amount {
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cell-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--surface-bg);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 10px 0 6px 0;
+}
+
+.cell-progress-fill {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cell-progress-text {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color);
+  font-weight: 500;
+}
+
+.cell-detail {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color);
+  padding: 8px 12px;
+  background: var(--surface-bg);
+  border-radius: var(--radius-sm);
+  margin-top: 8px;
+}
+
+.cell-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-border);
+}
+
+.cell-action-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-bg);
+  color: var(--tg-theme-text-color);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.cell-action-btn:hover {
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+}
+
+.cell-action-btn:active {
+  transform: scale(0.97);
+}
+
+.cell-action-btn.danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--accent-danger);
+}
+
+.cell-action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* ==========================================================================
+   Transaction History
+   ========================================================================== */
 .transactions-list {
   display: flex;
   flex-direction: column;
@@ -989,6 +1211,50 @@ html, body {
   background: var(--surface-card-subtle);
   color: var(--tg-theme-text-color);
   border: 1px solid var(--surface-border);
+}
+
+/* Cell Action Modal */
+.cell-action-modal {
+  max-width: 420px;
+}
+
+.cell-action-info {
+  background: var(--surface-card-subtle);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--tg-theme-hint-color);
+}
+
+.cell-action-info strong {
+  color: var(--tg-theme-text-color);
+  font-weight: 600;
+}
+
+.cell-action-info .highlight {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.cell-action-info .warning {
+  color: var(--accent-danger);
+  font-weight: 600;
+}
+
+.amount-input {
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+
+.amount-input::-webkit-inner-spin-button,
+.amount-input::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 40px;
 }
 
 /* Spinner */

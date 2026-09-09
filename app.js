@@ -56,17 +56,41 @@
   // =========================================================================
   // 2. Storage System (Telegram CloudStorage with LocalStorage fallback)
   // =========================================================================
-  const STORAGE_KEY = 'smart_budget_data_v1';
+  const STORAGE_KEY = 'smart_budget_data_v2'; // Updated version for new architecture
 
   const defaultState = {
+    // AI Settings
     apiKey: '',
     apiPreset: 'deepseek',
     apiEndpoint: 'https://api.deepseek.com/chat/completions',
     apiModel: 'deepseek-chat',
-    currentBalance: 0,
-    creditDebt: 0,
+    
+    // Financial Core
+    currentBalance: 0, // Начальный баланс 0 ₽
+    dailyLimit: 0, // Calculated dynamically
     daysSalary: 14,
-    transactions: []
+    
+    // Dynamic Financial Cells (Agentic Architecture)
+    cells: [
+      // Example structure:
+      // {
+      //   id: 'cell_xxxxx',
+      //   type: 'DEBT' | 'SAVINGS' | 'GOAL' | 'SUBSCRIPTION',
+      //   title: 'Кредитная карта Сбер',
+      //   amount: 15000,
+      //   target: 0, // For GOAL type
+      //   rate: 0, // For SAVINGS type (%)
+      //   dayOfMonth: 0, // For SUBSCRIPTION type
+      //   autoDeduct: 0.3, // For DEBT: % from income to auto-allocate
+      //   createdAt: '2026-09-09T10:00:00.000Z'
+      // }
+    ],
+    
+    // Transaction History
+    transactions: [],
+    
+    // Scheduled Reminders (for Telegram Bot integration)
+    reminders: []
   };
 
   const PRESETS = {
@@ -121,10 +145,56 @@
 
   function loadFromLocalStorage() {
     try {
-      const local = localStorage.getItem(STORAGE_KEY);
+      // Try loading v2 first
+      let local = localStorage.getItem(STORAGE_KEY);
+      
+      // If v2 doesn't exist, try migrating from v1
+      if (!local) {
+        const oldKey = 'smart_budget_data_v1';
+        const oldData = localStorage.getItem(oldKey);
+        
+        if (oldData) {
+          console.log('Migrating from v1 to v2...');
+          const oldParsed = JSON.parse(oldData);
+          
+          // Migrate old creditDebt to a DEBT cell
+          const migratedState = { ...defaultState, ...oldParsed };
+          
+          if (oldParsed.creditDebt && oldParsed.creditDebt > 0) {
+            migratedState.cells = [{
+              id: 'cell_migrated_debt_' + Date.now(),
+              type: 'DEBT',
+              title: 'Кредит (мигрировано)',
+              amount: oldParsed.creditDebt,
+              target: 0,
+              rate: 0,
+              dayOfMonth: 0,
+              autoDeduct: 0.3,
+              createdAt: new Date().toISOString()
+            }];
+          }
+          
+          delete migratedState.creditDebt; // Remove old field
+          appState = migratedState;
+          
+          // Save migrated data
+          saveData();
+          
+          // Clean up old storage
+          localStorage.removeItem(oldKey);
+          console.log('Migration complete!');
+          return;
+        }
+      }
+      
       if (local) {
         const parsed = JSON.parse(local);
         appState = { ...defaultState, ...parsed };
+        
+        // Ensure cells array exists
+        if (!appState.cells) {
+          appState.cells = [];
+        }
       }
     } catch (e) {
       console.error('Failed to load from localStorage', e);
@@ -171,10 +241,11 @@
     dailyFoodAmount: document.getElementById('dailyFoodAmount'),
     daysCountBadge: document.getElementById('daysCountBadge'),
     foodProgressBar: document.getElementById('foodProgressBar'),
-    currentBalance: document.getElementById('currentBalance'),
-    remainingDebt: document.getElementById('remainingDebt'),
-    remainingFood: document.getElementById('remainingFood'),
-    daysToSalary: document.getElementById('daysToSalary'),
+    // Note: currentBalance, remainingDebt, remainingFood, daysToSalary moved to dynamic cells
+    // currentBalance: document.getElementById('currentBalance'),
+    // remainingDebt: document.getElementById('remainingDebt'),
+    // remainingFood: document.getElementById('remainingFood'),
+    // daysToSalary: document.getElementById('daysToSalary'),
 
     // Analytics elements
     periodSpentLabel: document.getElementById('periodSpentLabel'),
@@ -199,11 +270,427 @@
     // Transactions list
     transactionsList: document.getElementById('transactionsList'),
     clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-    toastContainer: document.getElementById('toastContainer')
+    toastContainer: document.getElementById('toastContainer'),
+    
+    // Dynamic Cells Container
+    cellsContainer: document.getElementById('cellsContainer'),
+    
+    // Cell Action Modal
+    cellActionModal: document.getElementById('cellActionModal'),
+    cellActionTitle: document.getElementById('cellActionTitle'),
+    cellActionInfo: document.getElementById('cellActionInfo'),
+    cellActionAmountInput: document.getElementById('cellActionAmountInput'),
+    closeCellActionBtn: document.getElementById('closeCellActionBtn'),
+    cancelCellActionBtn: document.getElementById('cancelCellActionBtn'),
+    confirmCellActionBtn: document.getElementById('confirmCellActionBtn')
+  };
+
+  // Modal state for cell actions
+  let cellActionModalState = {
+    cellId: null,
+    action: null, // 'add' or 'withdraw'
+    cell: null
   };
 
   // =========================================================================
-  // 4. Toast Notifications
+  // 4. Dynamic Cells Manager (Agentic Architecture)
+  // =========================================================================
+  const CellsManager = {
+    // Cell type metadata
+    CELL_TYPES: {
+      DEBT: {
+        icon: '💳',
+        name: 'Долг / Кредит',
+        color: '#ef4444',
+        defaultAutoDeduct: 0  // Убрали дефолт 0.3, AI сам решает
+      },
+      SAVINGS: {
+        icon: '💰',
+        name: 'Вклад / Накопления',
+        color: '#10b981'
+      },
+      GOAL: {
+        icon: '🎯',
+        name: 'Копилка на цель',
+        color: '#8b5cf6'
+      },
+      SUBSCRIPTION: {
+        icon: '📅',
+        name: 'Подписка / Регулярный платёж',
+        color: '#f59e0b'
+      }
+    },
+
+    createCell(type, data) {
+      const cell = {
+        id: 'cell_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        type: type,
+        title: data.title || this.CELL_TYPES[type].name,
+        amount: Number(data.amount) || 0,
+        target: Number(data.target) || 0,
+        rate: Number(data.rate) || 0,
+        dayOfMonth: Number(data.dayOfMonth) || 0,
+        autoDeduct: data.autoDeduct !== undefined ? Number(data.autoDeduct) : 0,  // Без дефолта
+        createdAt: new Date().toISOString(),
+        ...data
+      };
+      
+      appState.cells.push(cell);
+      saveData();
+      return cell;
+    },
+
+    updateCell(cellId, updates) {
+      const cell = appState.cells.find(c => c.id === cellId);
+      if (!cell) return null;
+      
+      Object.assign(cell, updates);
+      saveData();
+      return cell;
+    },
+
+    deleteCell(cellId) {
+      appState.cells = appState.cells.filter(c => c.id !== cellId);
+      saveData();
+    },
+
+    getCellById(cellId) {
+      return appState.cells.find(c => c.id === cellId);
+    },
+
+    // Calculate total allocated funds in all cells
+    getTotalAllocated() {
+      return appState.cells.reduce((sum, cell) => {
+        if (cell.type === 'DEBT' || cell.type === 'GOAL' || cell.type === 'SAVINGS') {
+          return sum + (Number(cell.amount) || 0);
+        }
+        return sum;
+      }, 0);
+    },
+
+    // Calculate monthly income from savings
+    getMonthlyIncome() {
+      return appState.cells
+        .filter(c => c.type === 'SAVINGS')
+        .reduce((sum, cell) => {
+          const rate = Number(cell.rate) || 0;
+          const amount = Number(cell.amount) || 0;
+          return sum + (amount * rate / 100 / 12);
+        }, 0);
+    },
+
+    renderCell(cell) {
+      const meta = this.CELL_TYPES[cell.type];
+      let progressHTML = '';
+      let detailsHTML = '';
+
+      // Type-specific rendering
+      if (cell.type === 'GOAL' && cell.target > 0) {
+        const progress = Math.min(100, (cell.amount / cell.target) * 100);
+        progressHTML = `
+          <div class="cell-progress-bar">
+            <div class="cell-progress-fill" style="width: ${progress}%; background: ${meta.color};"></div>
+          </div>
+          <div class="cell-progress-text">${formatMoney(cell.amount)} / ${formatMoney(cell.target)} ₽ (${Math.round(progress)}%)</div>
+        `;
+      } else if (cell.type === 'SAVINGS' && cell.rate > 0) {
+        const monthlyIncome = (cell.amount * cell.rate / 100 / 12);
+        detailsHTML = `<div class="cell-detail">📈 ${cell.rate}% годовых • +${formatMoney(monthlyIncome)} ₽/мес</div>`;
+      } else if (cell.type === 'SUBSCRIPTION' && cell.dayOfMonth > 0) {
+        detailsHTML = `<div class="cell-detail">📅 Списание ${cell.dayOfMonth} числа каждого месяца</div>`;
+      }
+
+      // Кнопки в зависимости от типа ячейки
+      let actionsHTML = '';
+      if (cell.type === 'DEBT') {
+        // Для долгов: только "Погасить" и "Удалить"
+        actionsHTML = `
+          <div class="cell-actions">
+            <button class="cell-action-btn" data-action="add" data-cell-id="${cell.id}" title="Погасить долг">💳 Погасить</button>
+            <button class="cell-action-btn danger" data-action="delete" data-cell-id="${cell.id}" title="Удалить">🗑️</button>
+          </div>
+        `;
+      } else {
+        // Для остальных: "Пополнить", "Снять", "Удалить"
+        actionsHTML = `
+          <div class="cell-actions">
+            <button class="cell-action-btn" data-action="add" data-cell-id="${cell.id}" title="Пополнить">➕ Пополнить</button>
+            <button class="cell-action-btn" data-action="withdraw" data-cell-id="${cell.id}" title="Снять">➖ Снять</button>
+            <button class="cell-action-btn danger" data-action="delete" data-cell-id="${cell.id}" title="Удалить">🗑️</button>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="financial-cell" data-id="${cell.id}" data-type="${cell.type}" style="border-left: 4px solid ${meta.color};">
+          <div class="cell-header">
+            <div class="cell-icon">${meta.icon}</div>
+            <div class="cell-info">
+              <div class="cell-title">${escapeHtml(cell.title)}</div>
+              <div class="cell-type-badge" style="background: ${meta.color}20; color: ${meta.color};">${meta.name}</div>
+            </div>
+            <div class="cell-amount" style="color: ${meta.color};">${formatMoney(cell.amount)} ₽</div>
+          </div>
+          ${progressHTML}
+          ${detailsHTML}
+          ${actionsHTML}
+        </div>
+      `;
+    }
+  };
+
+  // Cell action handlers (no longer on window)
+  function addToCellPrompt(cellId) {
+    const cell = CellsManager.getCellById(cellId);
+    if (!cell) return;
+    
+    const availableBalance = appState.currentBalance;
+    
+    // Show modal immediately with loading state
+    cellActionModalState = { cellId, action: 'add', cell };
+    
+    if (cell.type === 'DEBT') {
+      elements.cellActionTitle.textContent = '💳 Погасить долг';
+    } else {
+      elements.cellActionTitle.textContent = '➕ Пополнить ячейку';
+    }
+    
+    elements.cellActionInfo.innerHTML = `
+      <strong>${CellsManager.CELL_TYPES[cell.type]?.icon || '💰'} ${escapeHtml(cell.title)}</strong><br>
+      <span style="color: #666;">🤖 Анализирую ситуацию...</span>
+    `;
+    elements.cellActionAmountInput.value = '';
+    elements.cellActionAmountInput.max = availableBalance;
+    elements.cellActionAmountInput.placeholder = `Максимум: ${formatMoney(availableBalance)} ₽`;
+    
+    elements.cellActionModal.classList.remove('hidden');
+    triggerHaptic('light');
+    
+    // Get AI recommendation
+    getAiRecommendationForCell(cell, availableBalance);
+  }
+
+  async function getAiRecommendationForCell(cell, availableBalance) {
+    try {
+      if (cell.type === 'DEBT' && aiAnalysisCache.debtRecommendation) {
+        updateModalWithRecommendation(cell, availableBalance, aiAnalysisCache.debtRecommendation);
+        return;
+      }
+      const allCells = appState.cells || [];
+      const totalDebt = allCells.filter(c => c.type === 'DEBT').reduce((sum, c) => sum + c.amount, 0);
+      const totalGoals = allCells.filter(c => c.type === 'GOAL').reduce((sum, c) => sum + (c.target - c.amount), 0);
+      
+      const prompt = `Ты тот же финансовый советник, который формирует рекомендации на главном экране. Пользователь хочет ${cell.type === 'DEBT' ? 'погасить долг' : 'пополнить ячейку'} "${cell.title}". Используй ровно те же правила расчёта, не применяй шаблонные 30%, 50% или 60%.
+
+📊 ТЕКУЩАЯ СИТУАЦИЯ:
+• Доступно на балансе: ${formatMoney(availableBalance)} ₽
+• Дней до зарплаты: ${appState.daysSalary} дн.
+• Тип ячейки: ${cell.type}
+${cell.type === 'DEBT' ? `• Текущий долг: ${formatMoney(cell.amount)} ₽` : ''}
+${cell.type === 'SAVINGS' ? `• Текущий вклад: ${formatMoney(cell.amount)} ₽` : ''}
+${cell.type === 'GOAL' ? `• Накоплено: ${formatMoney(cell.amount)} из ${formatMoney(cell.target)} ₽` : ''}
+${cell.type === 'SUBSCRIPTION' ? `• Сумма подписки: ${formatMoney(cell.amount)} ₽` : ''}
+
+📈 ОБЩАЯ КАРТИНА:
+• Всего долгов: ${formatMoney(totalDebt)} ₽
+• До целей осталось: ${formatMoney(totalGoals)} ₽
+• Всего ячеек: ${allCells.length}
+
+💡 ЗАДАЧА: Рассчитай посильную сумму для действия с учётом ${appState.daysSalary} дней до следующей зарплаты, дневного бюджета на еду, всех долгов, обязательных платежей и резерва. Сначала рассчитай резерв на весь период, затем сумму платежа как остаток после резерва. Если баланс больше нуля и это долг, не рекомендуй 0 ₽ — выбери положительную сумму после сохранения резерва. Для вклада сначала учти долги и обязательные платежи. Не используй другую формулу, если уже есть рекомендация главного экрана.
+
+Формат ответа (только текст, БЕЗ JSON):
+💡 Рекомендую ${cell.type === 'DEBT' ? 'погасить' : 'отложить'}: [сумма] ₽ ([процент]% доступного баланса)
+📅 До зарплаты: ${appState.daysSalary} дн. — [краткое обоснование]`;
+
+      const response = await fetch(appState.apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${appState.apiKey}`
+        },
+        body: JSON.stringify({
+          model: appState.apiModel,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.7,
+          max_tokens: 150
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`AI API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const recommendation = data.choices?.[0]?.message?.content?.trim() || 'Рекомендацию не удалось получить';
+      
+      // Update modal with AI recommendation
+      updateModalWithRecommendation(cell, availableBalance, recommendation);
+      
+    } catch (error) {
+      console.error('AI recommendation error:', error);
+      // Fallback to simple info
+      updateModalWithRecommendation(cell, availableBalance, null);
+    }
+  }
+
+  function updateModalWithRecommendation(cell, availableBalance, aiRecommendation) {
+    let infoHTML = '';
+    
+    if (cell.type === 'DEBT') {
+      infoHTML = `
+        <strong>💳 ${escapeHtml(cell.title)}</strong><br>
+        <span class="warning">Текущий долг: ${formatMoney(cell.amount)} ₽</span><br><br>
+        ${aiRecommendation ? `<div style="background: #eff6ff; padding: 8px; border-radius: 6px; font-size: 13px; line-height: 1.5;">${aiRecommendation}</div><br>` : ''}
+        📊 Доступно на балансе: <span class="highlight">${formatMoney(availableBalance)} ₽</span>
+      `;
+    } else if (cell.type === 'SAVINGS') {
+      infoHTML = `
+        <strong>💰 ${escapeHtml(cell.title)}</strong><br>
+        <span class="highlight">Текущий вклад: ${formatMoney(cell.amount)} ₽</span><br><br>
+        ${aiRecommendation ? `<div style="background: #eff6ff; padding: 8px; border-radius: 6px; font-size: 13px; line-height: 1.5;">${aiRecommendation}</div><br>` : ''}
+        📊 Доступно на балансе: <span class="highlight">${formatMoney(availableBalance)} ₽</span>
+      `;
+    } else if (cell.type === 'GOAL') {
+      const remaining = Math.max(0, cell.target - cell.amount);
+      infoHTML = `
+        <strong>🎯 ${escapeHtml(cell.title)}</strong><br>
+        <span class="highlight">Накоплено: ${formatMoney(cell.amount)} ₽ из ${formatMoney(cell.target)} ₽</span><br><br>
+        ${aiRecommendation ? `<div style="background: #eff6ff; padding: 8px; border-radius: 6px; font-size: 13px; line-height: 1.5;">${aiRecommendation}</div><br>` : ''}
+        🎯 <strong>До цели осталось:</strong> <span class="warning">${formatMoney(remaining)} ₽</span><br>
+        📊 Доступно на балансе: <span class="highlight">${formatMoney(availableBalance)} ₽</span>
+      `;
+    } else {
+      infoHTML = `
+        <strong>${CellsManager.CELL_TYPES[cell.type]?.icon || '💰'} ${escapeHtml(cell.title)}</strong><br>
+        <span class="highlight">Текущая сумма: ${formatMoney(cell.amount)} ₽</span><br><br>
+        ${aiRecommendation ? `<div style="background: #eff6ff; padding: 8px; border-radius: 6px; font-size: 13px; line-height: 1.5;">${aiRecommendation}</div><br>` : ''}
+        📊 Доступно на балансе: <span class="highlight">${formatMoney(availableBalance)} ₽</span>
+      `;
+    }
+    
+    elements.cellActionInfo.innerHTML = infoHTML;
+    setTimeout(() => elements.cellActionAmountInput.focus(), 100);
+  }
+
+  function withdrawFromCellPrompt(cellId) {
+    const cell = CellsManager.getCellById(cellId);
+    if (!cell) return;
+    
+    const infoHTML = `
+      <strong>${CellsManager.CELL_TYPES[cell.type]?.icon || '💰'} ${escapeHtml(cell.title)}</strong><br>
+      <span class="highlight">Доступно для снятия: ${formatMoney(cell.amount)} ₽</span><br><br>
+      ℹ️ Средства вернутся на общий баланс
+    `;
+    
+    // Set modal state
+    cellActionModalState = { cellId, action: 'withdraw', cell };
+    
+    // Update modal UI
+    elements.cellActionTitle.textContent = '➖ Снять средства';
+    elements.cellActionInfo.innerHTML = infoHTML;
+    elements.cellActionAmountInput.value = '';
+    elements.cellActionAmountInput.max = cell.amount;
+    elements.cellActionAmountInput.placeholder = `Максимум: ${formatMoney(cell.amount)} ₽`;
+    
+    // Show modal
+    elements.cellActionModal.classList.remove('hidden');
+    setTimeout(() => elements.cellActionAmountInput.focus(), 100);
+    triggerHaptic('light');
+  }
+
+  function closeCellActionModal() {
+    elements.cellActionModal.classList.add('hidden');
+    cellActionModalState = { cellId: null, action: null, cell: null };
+  }
+
+  function confirmCellAction() {
+    const { cellId, action, cell } = cellActionModalState;
+    if (!cellId || !action || !cell) return;
+    
+    const amount = Number(elements.cellActionAmountInput.value);
+    
+    if (!amount || isNaN(amount) || amount <= 0) {
+      showToast('Введите корректную сумму', 'error');
+      return;
+    }
+    
+    if (action === 'add') {
+      if (amount > appState.currentBalance) {
+        showToast('Недостаточно средств на балансе', 'error');
+        return;
+      }
+      
+      const updatedAmount = cell.type === 'DEBT' ? Math.max(0, cell.amount - amount) : cell.amount + amount;
+      CellsManager.updateCell(cellId, { amount: updatedAmount });
+      appState.currentBalance -= amount;
+      
+      appState.transactions.push({
+        id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+        amount: amount,
+        category: cell.type === 'DEBT' ? 'credit_debt' : 'cell_deposit',
+        description: cell.type === 'DEBT' ? `Погашение: ${cell.title}` : `Пополнение: ${cell.title}`,
+        cellId: cellId,
+        date: new Date().toISOString()
+      });
+      
+      // Invalidate AI cache and refresh
+      aiAnalysisCache.lastUpdate = null;
+      saveData();
+      getProactiveAiAnalysis().then(() => renderDashboard());
+      showToast(cell.type === 'DEBT' ? `Погашено ${formatMoney(amount)} ₽ → ${cell.title}` : `Пополнено ${formatMoney(amount)} ₽ → ${cell.title}`, 'success');
+      triggerHaptic('success');
+      
+    } else if (action === 'withdraw') {
+      if (amount > cell.amount) {
+        showToast('Недостаточно средств в ячейке', 'error');
+        return;
+      }
+      
+      CellsManager.updateCell(cellId, { amount: cell.amount - amount });
+      appState.currentBalance += amount;
+      
+      appState.transactions.push({
+        id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+        amount: amount,
+        category: 'cell_withdrawal',
+        description: `Снятие из: ${cell.title}`,
+        cellId: cellId,
+        date: new Date().toISOString()
+      });
+      
+      // Invalidate AI cache and refresh
+      aiAnalysisCache.lastUpdate = null;
+      saveData();
+      getProactiveAiAnalysis().then(() => renderDashboard());
+      showToast(`Снято ${formatMoney(amount)} ₽ ← ${cell.title}`, 'success');
+      triggerHaptic('success');
+    }
+    
+    closeCellActionModal();
+  }
+
+  function deleteCellConfirm(cellId) {
+    const cell = CellsManager.getCellById(cellId);
+    if (!cell) return;
+    
+    const hasBalance = cell.amount > 0;
+    const confirmText = hasBalance 
+      ? `Удалить ячейку "${cell.title}"?\n\n⚠️ Внимание: Средства (${formatMoney(cell.amount)} ₽) будут списаны и НЕ вернутся на баланс.\n\nСначала снимите деньги кнопкой "Снять", если хотите их сохранить.`
+      : `Удалить ячейку "${cell.title}"?`;
+    
+    if (!confirm(confirmText)) return;
+    
+    // НЕ возвращаем баланс при удалении
+    CellsManager.deleteCell(cellId);
+    
+    saveData();
+    renderDashboard();
+    showToast(`Ячейка "${cell.title}" удалена`, 'info');
+    triggerHaptic('medium');
+  }
+
+  // =========================================================================
+  // 5. Toast Notifications
   // =========================================================================
   function showToast(message, type = 'info') {
     const toast = document.createElement('div');
@@ -225,13 +712,13 @@
   }
 
   // =========================================================================
-  // 5. Budget Computation & Render Logic
+  // 5. Budget Computation & Render Logic (Analytics Period)
   // =========================================================================
-  function formatMoney(amount) {
-    return Math.round(amount).toLocaleString('ru-RU');
-  }
-
   let selectedAnalyticsPeriod = 'month';
+
+  // AI conversation history (last 10 messages for context)
+  let conversationHistory = [];
+  const MAX_HISTORY_LENGTH = 10;
 
   function filterTransactionsByPeriod(period) {
     const now = new Date();
@@ -282,56 +769,136 @@
     elements.periodSpentValue.textContent = `${formatMoney(periodExpenses)} ₽`;
     elements.periodIncomeValue.textContent = `+${formatMoney(periodIncomes)} ₽`;
 
-    // Calculate smart debt payoff recommendation:
-    // Formula: Look at balance, days left, and current debt.
-    const currentBalance = Number(appState.currentBalance) || 0;
-    const debt = Number(appState.creditDebt) || 0;
-    const days = Math.max(1, Number(appState.daysSalary) || 1);
+    // Smart recommendations based on cells
+    const financials = calculateFinancials();
+    const debtCells = appState.cells.filter(c => c.type === 'DEBT');
+    const totalDebt = debtCells.reduce((sum, c) => sum + c.amount, 0);
 
-    if (debt <= 0) {
-      elements.debtRecommendText.innerHTML = `🎉 У вас <b>нет активного долга</b> по кредитке. Все средства свободны для накоплений и текущих трат!`;
+    if (proactiveAnalysisLoading) {
+      elements.debtRecommendText.innerHTML = 'ИИ анализирует долги, резерв и доступную сумму…';
+    } else if (totalDebt <= 0 && debtCells.length === 0) {
+      elements.debtRecommendText.innerHTML = `🎉 У вас <b>нет активных долгов</b>. Все средства свободны для накоплений и текущих трат!`;
+    } else if (debtCells.length > 0) {
+      const debtInfo = debtCells.map(c => `<b>${escapeHtml(c.title)}</b>: ${formatMoney(c.amount)} ₽`).join(', ');
+      elements.debtRecommendText.innerHTML = `💳 Активные долги: ${debtInfo}.<br>📅 До зарплаты: <b>${financials.days} дн.</b><br>💡 ${aiAnalysisCache.debtRecommendation || 'ИИ анализирует баланс, срок до зарплаты и приоритет долга.'}`;
     } else {
-      // 60% of balance reserved for food/living
-      const foodBudget = currentBalance * 0.6;
-      // Remaining 40% is non-food discretionary
-      const potentialDebtFunds = Math.max(0, currentBalance - foodBudget);
-
-      if (currentBalance <= 0) {
-        elements.debtRecommendText.innerHTML = `⚠️ Баланс на нуле. Рекомендуем сначала закрыть базовые потребности в еде до пополнения.`;
-      } else if (potentialDebtFunds >= debt) {
-        elements.debtRecommendText.innerHTML = `💡 Баланс позволяет <b>полностью закрыть долг ${formatMoney(debt)} ₽</b> прямо сейчас и сохранить ${formatMoney(foodBudget)} ₽ (${Math.round(foodBudget / days)} ₽/день) на еду.`;
-      } else if (potentialDebtFunds > 0) {
-        const recommendPay = Math.round(potentialDebtFunds * 0.7); // 70% of discretionary to debt
-        elements.debtRecommendText.innerHTML = `💡 Рекомендуется внести <b>${formatMoney(recommendPay)} ₽</b> на кредитку. Остаток долга: <b>${formatMoney(debt - recommendPay)} ₽</b>. На еду останется <b>${formatMoney(currentBalance - recommendPay)} ₽</b> (~${Math.round((currentBalance - recommendPay) * 0.6 / days)} ₽/день).`;
-      } else {
-        elements.debtRecommendText.innerHTML = `⚠️ Свободных средств мало (${formatMoney(currentBalance)} ₽ на ${days} дн.). Внесите символические <b>${formatMoney(Math.min(debt, 500))} ₽</b> или минимальный платеж, чтобы не урезать питание.`;
-      }
+      elements.debtRecommendText.innerHTML = `💡 Рекомендуем создать ячейки для управления долгами через ИИ-помощника.`;
     }
   }
 
-  function renderDashboard() {
-    const currentBalance = Number(appState.currentBalance) || 0;
-    const remainingDebt = Number(appState.creditDebt) || 0;
+  // =========================================================================
+  // 6. Financial Calculations & Rendering (New Agentic Logic)
+  // =========================================================================
+  function formatMoney(amount) {
+    return Math.round(amount).toLocaleString('ru-RU');
+  }
+
+  function calculateFinancials() {
+    // Total allocated in cells (frozen funds)
+    const totalAllocated = CellsManager.getTotalAllocated();
+    
+    // Free balance = current balance (all liquid funds not in cells)
+    const freeBalance = Math.max(0, Number(appState.currentBalance) || 0);
+    
+    // Calculate daily limit from free balance only
     const days = Math.max(1, Number(appState.daysSalary) || 1);
+    const dailyLimit = Math.round(freeBalance / days);
+    
+    // Update state
+    appState.dailyLimit = dailyLimit;
+    
+    return {
+      freeBalance,
+      totalAllocated,
+      dailyLimit,
+      days,
+      totalBalance: freeBalance + totalAllocated
+    };
+  }
 
-    // Auto-calculate available food budget:
-    // 60% of free funds allocated for food
-    const freePool = Math.max(0, currentBalance);
-    const calculatedFoodBudget = Math.round(freePool * 0.6);
+  function renderCells() {
+    if (!elements.cellsContainer) return;
+    
+    const financials = calculateFinancials();
+    
+    // BASE CELLS (always visible)
+    const baseCells = [
+      {
+        id: '__base_balance',
+        type: 'BASE_BALANCE',
+        icon: '💰',
+        title: 'Свободный баланс',
+        amount: financials.freeBalance,
+        color: '#10b981',
+        description: 'Доступные средства'
+      },
+      {
+        id: '__base_days',
+        type: 'BASE_DAYS',
+        icon: '🗓️',
+        title: 'До зарплаты',
+        amount: financials.days,
+        suffix: 'дн.',
+        color: '#3b82f6',
+        description: 'Осталось дней'
+      },
+      {
+        id: '__base_food',
+        type: 'BASE_FOOD',
+        icon: '🍔',
+        title: 'Бюджет на питание',
+        amount: aiAnalysisCache.foodBudgetAmount ?? financials.freeBalance,
+        color: '#f59e0b',
+        description: proactiveAnalysisLoading ? 'ИИ рассчитывает бюджет…' : (aiAnalysisCache.foodBudgetAdvice || `ИИ рассчитывает на ${financials.days} дн.`),
+        loading: proactiveAnalysisLoading
+      }
+    ];
+    
+    // Render base cells
+    let html = baseCells.map(cell => {
+      return `
+        <div class="financial-cell base-cell" data-id="${cell.id}" style="border-left: 4px solid ${cell.color};">
+          <div class="cell-header">
+            <div class="cell-icon">${cell.icon}</div>
+            <div class="cell-info">
+              <div class="cell-title">${cell.title}</div>
+              <div class="cell-type-badge" style="background: ${cell.color}20; color: ${cell.color};">${cell.description}</div>
+            </div>
+            <div class="cell-amount${cell.loading ? ' value-loading' : ''}" style="color: ${cell.color};">${cell.loading ? '•••' : `${formatMoney(cell.amount)} ${cell.suffix || '₽'}`}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    // Add user cells if any
+    if (appState.cells && appState.cells.length > 0) {
+      html += '<div class="cells-divider"><span>Дополнительные ячейки</span></div>';
+      html += appState.cells.map(cell => CellsManager.renderCell(cell)).join('');
+    }
+    
+    elements.cellsContainer.innerHTML = html;
+  }
 
-    // Daily food = Остаток на еду / Дней
-    const dailyFood = Math.round(calculatedFoodBudget / days);
-
-    // Progress bar
-    const foodPercent = freePool > 0 ? Math.min(100, Math.max(0, (calculatedFoodBudget / (freePool || 1)) * 100)) : 0;
-
-    // Update DOM
-    elements.dailyFoodAmount.textContent = formatMoney(dailyFood);
-    elements.daysCountBadge.textContent = days;
-    elements.currentBalance.textContent = formatMoney(currentBalance);
-    elements.remainingDebt.textContent = formatMoney(remainingDebt);
-    elements.remainingFood.textContent = formatMoney(calculatedFoodBudget);
-    elements.daysToSalary.textContent = days;
+  function renderDashboard() {
+    const financials = calculateFinancials();
+    
+    // Показываем дневной лимит, рассчитанный AI, если он уже получен.
+    const aiFoodTotal = Number(aiAnalysisCache.foodBudgetAmount);
+    const dailyFoodLimit = aiFoodTotal > 0 && financials.days > 0
+      ? aiFoodTotal / financials.days
+      : financials.dailyLimit;
+    elements.dailyFoodAmount.textContent = proactiveAnalysisLoading ? '…' : formatMoney(dailyFoodLimit);
+    elements.daysCountBadge.textContent = financials.days;
+    if (elements.heroSubtext) {
+      elements.heroSubtext.textContent = proactiveAnalysisLoading
+        ? 'ИИ рассчитывает бюджет, долги и резерв…'
+        : (aiAnalysisCache.foodBudgetAdvice || `Безопасный лимит на ${financials.days} дн. до зарплаты`);
+    }
+    
+    // Progress bar (visual indicator)
+    const foodPercent = financials.freeBalance > 0
+      ? Math.min(100, Math.max(0, (dailyFoodLimit / Math.max(financials.dailyLimit, 1)) * 100))
+      : 0;
     elements.foodProgressBar.style.width = `${foodPercent}%`;
 
     // Update Model Badge
@@ -348,6 +915,7 @@
       elements.apiKeyBanner.classList.add('hidden');
     }
 
+    renderCells();
     renderAnalytics();
     renderTransactions();
   }
@@ -362,11 +930,28 @@
         return { icon: '💳', name: 'Погашение кредита', class: 'debt-repay', isIncome: false };
       case 'transport':
         return { icon: '🚕', name: 'Транспорт', class: 'expense', isIncome: false };
+      case 'cell_deposit':
+        return { icon: '📥', name: 'Пополнение ячейки', class: 'cell-transfer', isIncome: false };
+      case 'cell_withdrawal':
+        return { icon: '📤', name: 'Снятие из ячейки', class: 'cell-transfer', isIncome: true };
+      case 'entertainment':
+        return { icon: '🎮', name: 'Развлечения', class: 'expense', isIncome: false };
+      case 'health':
+        return { icon: '💊', name: 'Здоровье', class: 'expense', isIncome: false };
+      case 'shopping':
+        return { icon: '🛍️', name: 'Покупки', class: 'expense', isIncome: false };
       case 'entertainment':
         return { icon: '🎉', name: 'Развлечения', class: 'expense', isIncome: false };
+      case 'other':
       default:
-        return { icon: '🏷️', name: 'Расход', class: 'expense', isIncome: false };
+        return { icon: '📝', name: 'Прочее', class: 'expense', isIncome: false };
     }
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   function renderTransactions() {
@@ -392,7 +977,7 @@
           minute: '2-digit'
         });
 
-        const sign = tx.category === 'income' ? '+' : '-';
+        const sign = meta.isIncome ? '+' : '-';
 
         return `
           <div class="transaction-item" data-id="${tx.id}">
@@ -446,74 +1031,166 @@
     const endpoint = appState.apiEndpoint || 'https://api.deepseek.com/chat/completions';
     const model = appState.apiModel || 'deepseek-chat';
 
-    // Current budget context
-    const currentBalance = Number(appState.currentBalance) || 0;
-    const remainingDebt = Number(appState.creditDebt) || 0;
-    const days = Math.max(1, Number(appState.daysSalary) || 1);
+    // Current financial state
+    const financials = calculateFinancials();
+    
+    // Serialize cells for AI context
+    const cellsContext = appState.cells.map(cell => {
+      const meta = CellsManager.CELL_TYPES[cell.type];
+      return `- ${meta.icon} "${cell.title}" (${meta.name}): ${formatMoney(cell.amount)} ₽${cell.target ? ` / Цель: ${formatMoney(cell.target)} ₽` : ''}`;
+    }).join('\n') || 'Нет активных ячеек';
 
-    const freePool = Math.max(0, currentBalance);
-    const calculatedFoodBudget = Math.round(freePool * 0.6);
-    const dailyFood = Math.round(calculatedFoodBudget / days);
+    const systemPrompt = `Ты — умный AI-ассистент для управления личными финансами в Telegram Mini App.
 
-    const systemPrompt = `Ты — умный персональный финансовый ассистент в Telegram Mini App.
+🔹 ТЕКУЩЕЕ ФИНАНСОВОЕ СОСТОЯНИЕ:
+- Свободный баланс (liquid): ${formatMoney(financials.freeBalance)} ₽
+- Средства в ячейках (frozen): ${formatMoney(financials.totalAllocated)} ₽
+- Общий баланс: ${formatMoney(financials.totalBalance)} ₽
+- Суточный лимит: ${formatMoney(financials.dailyLimit)} ₽
+- Дней до зарплаты: ${financials.days} дн.
 
-ТЕКУЩЕЕ СОСТОЯНИЕ БЮДЖЕТА:
-- Текущий баланс: ${currentBalance} ₽
-- Долг по кредитке / кредиту: ${remainingDebt} ₽
-- Дней до зарплаты: ${days} дн.
-- Рассчитанный остаток на еду (60%): ${calculatedFoodBudget} ₽ (~${dailyFood} ₽/день)
+🏦 АКТИВНЫЕ ФИНАНСОВЫЕ ЯЧЕЙКИ:
+${cellsContext}
 
-ТВОЯ ЗАДАЧА:
-Проанализируй ввод пользователя на русском языке и определи действия. Ввод может содержать одно или сразу несколько действий.
+📋 ТВОЯ ЗАДАЧА — AGENTIC UI:
+Проанализируй команду пользователя на русском языке и верни структурированный JSON-ответ.
 
-ВОЗМОЖНЫЕ ДЕЙСТВИЯ:
-1. ДОХОД / ПОПОЛНЕНИЕ БАЛАНСА (например: "пришли деньги 5000", "дали премию 20000", "зарплата 65000", "баланс 10000", "у меня сейчас 30000 рублей"):
-   -> Добавь в income_items или укажи new_balance.
-2. РАСХОД (например: "кофе 250", "купил продукты 1200 и аптека 450"):
-   -> Добавь в expense_items.
-3. ПОГАШЕНИЕ ДОЛГА (например: "закинул на кредитку 3000", "погасил долг 5000"):
-   -> Добавь в expense_items с категорией "credit_debt".
-4. УСТАНОВКА ИЛИ ИЗМЕНЕНИЕ ДОЛГА (например: "мой долг 15000", "у меня долг по кредитке 25к"):
-   -> Укажи new_debt.
-5. УСТАНОВКА ИЛИ ИЗМЕНЕНИЕ ДНЕЙ ДО ЗП (например: "осталось 10 дней", "до зарплаты 5 дней", "с этими деньгами на 2 недели", "мне на 20 дней"):
-   -> Укажи new_days.
-6. ВОПРОС / СОВЕТ / ОБЩЕНИЕ (например: "на сколько дней мне хватит?", "сколько могу тратить в день?", "дай совет"):
-   -> Составь развернутый, доброжелательный, математически точный ответ с расчетом в поле message.
+ВОЗМОЖНЫЕ ТИПЫ ДЕЙСТВИЙ:
 
-ВЕРНИ СТРОГО JSON следующего формата:
+1️⃣ ТРАНЗАКЦИИ (доход/расход):
+   - "пришла зарплата 50000" → income
+   - "купил продукты 1200" → expense
+   - "еда 300 + такси 200" → multiple expenses
+
+2️⃣ УПРАВЛЕНИЕ ЯЧЕЙКАМИ:
+   - "создай вклад 100000 рублей под 18%" → CREATE_CELL (SAVINGS)
+   - "копилка на iPhone 80000" → CREATE_CELL (GOAL)
+   - "долг по кредитке 25000 с автовзносом 30%" → CREATE_CELL (DEBT)
+   - "подписка Spotify 199р списывается 5 числа" → CREATE_CELL (SUBSCRIPTION)
+   - "пополни копилку на 5000" → UPDATE_CELL
+   - "удали ячейку вклад" → DELETE_CELL
+
+3️⃣ ПАРАМЕТРЫ БЮДЖЕТА:
+   - "до зарплаты 12 дней" → update daysSalary
+   - "мне на 2 недели" → update daysSalary
+
+4️⃣ ВОПРОСЫ И СОВЕТЫ:
+   - "сколько могу тратить в день?"
+   - "на сколько дней хватит?"
+   - "дай совет по финансам"
+
+🎯 ФОРМАТ ОТВЕТА (СТРОГО JSON):
+
 {
-  "income_items": [
+  "ai_response": "Дружелюбный ответ пользователю с подтверждением действий",
+  "daily_limit": number | null,  // Обновленный суточный лимит (если изменился)
+  "actions": [
     {
-      "amount": number,
-      "description": string
+      "type": "INCOME" | "EXPENSE" | "CREATE_CELL" | "UPDATE_CELL" | "DELETE_CELL" | "UPDATE_DAYS" | "SET_BALANCE",
+      "data": {
+        // Для INCOME/EXPENSE:
+        "amount": number,
+        "category": "food" | "transport" | "entertainment" | "shopping" | "health" | "other" | "income",
+        "description": string,
+        
+        // Для CREATE_CELL:
+        "cellType": "DEBT" | "SAVINGS" | "GOAL" | "SUBSCRIPTION",
+        "title": string,
+        "amount": number,
+        "target": number,        // Для GOAL
+        "rate": number,          // Для SAVINGS (%)
+        "dayOfMonth": number,    // Для SUBSCRIPTION (1-31)
+        "autoDeduct": number,    // Для DEBT (0.0-1.0, default 0.3)
+        
+        // Для UPDATE_CELL:
+        "cellId": string | null,  // Если null, найти по title
+        "title": string,          // Для поиска ячейки
+        "amountChange": number,   // Положительное = пополнение, отрицательное = снятие
+        
+        // Для DELETE_CELL:
+        "cellId": string | null,
+        "title": string,
+        
+        // Для UPDATE_DAYS:
+        "days": number,
+        
+        // Для SET_BALANCE (корректировка баланса):
+        "balance": number,       // Новое значение баланса
+        "description": string    // Причина изменения
+      }
     }
-  ],
-  "expense_items": [
-    {
-      "amount": number,
-      "category": "food" | "credit_debt" | "transport" | "entertainment" | "general",
-      "description": string
-    }
-  ],
-  "new_balance": number | null, // Заполни, если пользователь прямо задал баланс ("мой баланс 25000")
-  "new_debt": number | null,    // Заполни, если пользователь задал/обновил сумму долга ("долг 10000")
-  "new_days": number | null,    // Заполни, если пользователь указал кол-во дней ("на 12 дней", "осталось 5 дней")
-  "message": string             // Комментарий, подтверждение действий или ответ на вопрос пользователя
+  ]
 }
 
-Категории для expense_items:
-- "food": еда, кафе, ресторан, доставка, продукты, обед, перекус
-- "credit_debt": оплата/погашение долга или кредитки
-- "transport": такси, метро, бензин, проезд
-- "entertainment": кино, игры, подписки, отдых
-- "general": прочее`;
+⚠️ ВАЖНЫЕ ПРАВИЛА:
+- autoDeduct БОЛЬШЕ НЕ ИСПОЛЬЗУЕТСЯ! Ты САМ распределяешь средства через UPDATE_CELL
+- Для SAVINGS обязательно укажи rate (процентная ставка)
+- Для GOAL обязательно укажи target (целевая сумма)
+- Для SUBSCRIPTION укажи dayOfMonth (день месяца списания)
+- При UPDATE_CELL используй amountChange (не переписывай amount целиком)
+- Используй SET_BALANCE если пользователь говорит "у меня неправильный баланс", "поставь баланс X", "исправь баланс на Y"
+- Все суммы в рублях, без копеек
+- ai_response должен быть эмоциональным, с эмодзи, подтверждением действий
+
+💡 УМНОЕ РАСПРЕДЕЛЕНИЕ СРЕДСТВ (ТЫ ПОЛНОСТЬЮ КОНТРОЛИРУЕШЬ ПРОЦЕСС):
+
+🎯 **КРИТИЧЕСКИ ВАЖНО:** Когда пользователь получает доход (зарплата, премия), ты должен:
+1. Проанализировать его финансовую ситуацию
+2. Дать рекомендацию в текстовом виде (ai_response)
+3. **НЕ ВЫПОЛНЯТЬ АВТОМАТИЧЕСКИ** - пользователь должен подтвердить!
+
+**КАК ЭТО РАБОТАЕТ:**
+
+Шаг 1: Получен доход
+- Пользователь пишет: "Пришла зарплата 10000"
+- Ты выполняешь ТОЛЬКО действие INCOME
+- В ai_response даёшь рекомендацию по распределению
+- Просишь подтверждения
+
+Шаг 2: Пользователь подтверждает
+- Пользователь пишет: "Принято" или "Давай" или "Ок"
+- Ты выполняешь множественные UPDATE_CELL действия для распределения средств по ячейкам
+
+**ПРИОРИТЕТЫ (в порядке важности):**
+
+1. **КРИТИЧНЫЕ ДОЛГИ (высокий приоритет):**
+   - Если есть DEBT ячейки с суммой > 20% от дохода → это критичный долг
+   - Рекомендуй погасить МИНИМУМ 30% от текущего долга (не от дохода!)
+   - Пример: долг 30000₽, доход 10000₽ → рекомендуй 9000₽ (30% от долга)
+   - Если 30% от долга больше 50% дохода → рекомендуй 40-50% дохода
+   
+2. **ПОДПИСКИ И ОБЯЗАТЕЛЬНЫЕ ПЛАТЕЖИ:**
+   - SUBSCRIPTION ячейки со сроком оплаты в ближайшие 7 дней → зарезервировать полную сумму
+   - Это приоритет #1, деньги нельзя распределять в другие категории
+
+3. **НАКОПЛЕНИЯ (средний приоритет):**
+   - Если нет критичных долгов → 15-25% в SAVINGS
+   - Если есть GOAL близкая к завершению (>70%) → предложи добавить недостающее
+   - Минимум: 10% от дохода должно идти в накопления
+
+4. **РЕЗЕРВ НА ЖИЗНЬ:**
+   - Еда, транспорт, непредвиденные расходы
+   - МИНИМУМ: (дни до зарплаты × 300₽) для базовых нужд
+   - Остаток после всех выплат и накоплений
+
+**ВАЖНО:**
+- Не используй фиксированные проценты и шаблонные суммы.
+- Сначала рассчитай резерв на ${appState.daysSalary} дней до зарплаты и обязательные платежи.
+- Остаток распределяй между долгами, целями и накоплениями по приоритету.
+- Если есть долг и доступный остаток после резерва больше нуля, предложи положительный платёж, а не 0 ₽.
+- При подтверждённом распределении выполняй только рассчитанные действия.
+- **НИКОГДА не распределяй автоматически при получении дохода - только по подтверждению!**`;
+
+    // Build messages array with conversation history
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...conversationHistory,
+      { role: 'user', content: userInput }
+    ];
 
     const requestBody = {
       model: model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userInput }
-      ],
+      messages: messages,
       temperature: 0.2
     };
 
@@ -570,7 +1247,7 @@
   }
 
   // =========================================================================
-  // 7. Expense & Chat Form Handling
+  // 7. Expense & Chat Form Handling (New Agentic Actions System)
   // =========================================================================
   async function handleExpenseSubmit() {
     const text = elements.naturalInput.value.trim();
@@ -584,87 +1261,209 @@
       let changesApplied = 0;
       const appliedNotes = [];
 
-      // 1. Direct balance override if specified
-      if (typeof result.new_balance === 'number' && !isNaN(result.new_balance)) {
-        appState.currentBalance = Math.max(0, result.new_balance);
-        changesApplied++;
-        appliedNotes.push(`Баланс установлен: ${formatMoney(appState.currentBalance)} ₽`);
-      }
+      // Process actions array
+      if (result.actions && Array.isArray(result.actions)) {
+        for (const action of result.actions) {
+          const actionType = action.type;
+          const data = action.data || {};
 
-      // 2. Income items
-      if (result.income_items && Array.isArray(result.income_items)) {
-        result.income_items.forEach((inc) => {
-          const amt = Number(inc.amount);
-          if (!isNaN(amt) && amt > 0) {
-            appState.currentBalance = (Number(appState.currentBalance) || 0) + amt;
-            appState.transactions.push({
-              id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-              amount: amt,
-              category: 'income',
-              description: inc.description || 'Пополнение',
-              date: new Date().toISOString()
-            });
-            changesApplied++;
-            appliedNotes.push(`+${formatMoney(amt)} ₽ (${inc.description || 'Доход'})`);
-          }
-        });
-      }
-
-      // 3. Expense items (including legacy .items fallback)
-      const expenses = result.expense_items || (result.action === 'add_expense' || result.action === 'expense_and_answer' ? result.items : null);
-      if (expenses && Array.isArray(expenses)) {
-        expenses.forEach((item) => {
-          const amount = Number(item.amount);
-          if (!isNaN(amount) && amount > 0) {
-            // Deduct from balance
-            appState.currentBalance = Math.max(0, (Number(appState.currentBalance) || 0) - amount);
-
-            // If debt repayment, also reduce creditDebt
-            if (item.category === 'credit_debt') {
-              appState.creditDebt = Math.max(0, (Number(appState.creditDebt) || 0) - amount);
+          switch (actionType) {
+            case 'INCOME': {
+              const amt = Number(data.amount);
+              if (!isNaN(amt) && amt > 0) {
+                appState.currentBalance += amt;
+                appState.transactions.push({
+                  id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+                  amount: amt,
+                  category: 'income',
+                  description: data.description || 'Пополнение',
+                  date: new Date().toISOString()
+                });
+                changesApplied++;
+                appliedNotes.push(`+${formatMoney(amt)} ₽`);
+              }
+              break;
             }
 
-            appState.transactions.push({
-              id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-              amount: amount,
-              category: item.category || 'general',
-              description: item.description || 'Расход',
-              date: new Date().toISOString()
-            });
-            changesApplied++;
-            appliedNotes.push(`-${formatMoney(amount)} ₽ (${item.description || 'Расход'})`);
+            case 'EXPENSE': {
+              const amt = Number(data.amount);
+              if (!isNaN(amt) && amt > 0) {
+                appState.currentBalance = Math.max(0, appState.currentBalance - amt);
+                appState.transactions.push({
+                  id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+                  amount: amt,
+                  category: data.category || 'other',
+                  description: data.description || 'Расход',
+                  date: new Date().toISOString()
+                });
+                changesApplied++;
+                appliedNotes.push(`-${formatMoney(amt)} ₽`);
+              }
+              break;
+            }
+
+            case 'CREATE_CELL': {
+              const cellType = data.cellType;
+              if (!cellType || !CellsManager.CELL_TYPES[cellType]) {
+                console.warn('Unknown cell type:', cellType);
+                break;
+              }
+
+              const cellData = {
+                title: data.title || CellsManager.CELL_TYPES[cellType].name,
+                amount: Number(data.amount) || 0,
+                target: Number(data.target) || 0,
+                rate: Number(data.rate) || 0,
+                dayOfMonth: Number(data.dayOfMonth) || 0,
+                autoDeduct: data.autoDeduct !== undefined ? Number(data.autoDeduct) : 0  // Без дефолта
+              };
+
+              // Deduct initial amount from balance if cell has funds
+              // DEBT и SUBSCRIPTION не требуют баланса (это обязательства, а не активы)
+              if (cellData.amount > 0 && cellType !== 'DEBT' && cellType !== 'SUBSCRIPTION') {
+                if (appState.currentBalance < cellData.amount) {
+                  showToast('Недостаточно средств для создания ячейки', 'error');
+                  break;
+                }
+                appState.currentBalance -= cellData.amount;
+              }
+
+              CellsManager.createCell(cellType, cellData);
+              changesApplied++;
+              appliedNotes.push(`Создана: ${cellData.title}`);
+              break;
+            }
+
+            case 'UPDATE_CELL': {
+              let cell = null;
+              
+              if (data.cellId) {
+                cell = CellsManager.getCellById(data.cellId);
+              } else if (data.title) {
+                // Find by title (fuzzy match)
+                const title = data.title.toLowerCase();
+                cell = appState.cells.find(c => c.title.toLowerCase().includes(title) || title.includes(c.title.toLowerCase()));
+              }
+
+              if (!cell) {
+                showToast('Ячейка не найдена', 'error');
+                break;
+              }
+
+              const amountChange = Number(data.amountChange) || 0;
+              
+              if (amountChange > 0) {
+                // Deposit into cell
+                if (appState.currentBalance < amountChange) {
+                  showToast('Недостаточно средств', 'error');
+                  break;
+                }
+                appState.currentBalance -= amountChange;
+                CellsManager.updateCell(cell.id, { amount: cell.amount + amountChange });
+                appliedNotes.push(`+${formatMoney(amountChange)} ₽ → ${cell.title}`);
+              } else if (amountChange < 0) {
+                // Withdraw from cell
+                const withdrawAmount = Math.abs(amountChange);
+                if (cell.amount < withdrawAmount) {
+                  showToast('Недостаточно средств в ячейке', 'error');
+                  break;
+                }
+                appState.currentBalance += withdrawAmount;
+                CellsManager.updateCell(cell.id, { amount: cell.amount - withdrawAmount });
+                appliedNotes.push(`-${formatMoney(withdrawAmount)} ₽ ← ${cell.title}`);
+              }
+
+              changesApplied++;
+              break;
+            }
+
+            case 'DELETE_CELL': {
+              let cell = null;
+              
+              if (data.cellId) {
+                cell = CellsManager.getCellById(data.cellId);
+              } else if (data.title) {
+                const title = data.title.toLowerCase();
+                cell = appState.cells.find(c => c.title.toLowerCase().includes(title) || title.includes(c.title.toLowerCase()));
+              }
+
+              if (!cell) {
+                showToast('Ячейка не найдена', 'error');
+                break;
+              }
+
+              // Return funds to balance
+              appState.currentBalance += cell.amount;
+              CellsManager.deleteCell(cell.id);
+              changesApplied++;
+              appliedNotes.push(`Удалена: ${cell.title}`);
+              break;
+            }
+
+            case 'UPDATE_DAYS': {
+              const days = Number(data.days);
+              if (!isNaN(days) && days > 0) {
+                appState.daysSalary = Math.round(days);
+                changesApplied++;
+                appliedNotes.push(`Дней: ${appState.daysSalary}`);
+              }
+              break;
+            }
+
+            case 'SET_BALANCE': {
+              const newBalance = Number(data.balance);
+              if (!isNaN(newBalance) && newBalance >= 0) {
+                const oldBalance = appState.currentBalance;
+                appState.currentBalance = newBalance;
+                changesApplied++;
+                appliedNotes.push(`Баланс установлен: ${formatMoney(newBalance)} ₽ (было ${formatMoney(oldBalance)} ₽)`);
+                
+                // Add transaction for tracking
+                appState.transactions.push({
+                  id: 'tx-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+                  amount: newBalance - oldBalance,
+                  category: 'balance_correction',
+                  description: data.description || 'Корректировка баланса',
+                  date: new Date().toISOString()
+                });
+              }
+              break;
+            }
+
+            default:
+              console.warn('Unknown action type:', actionType);
           }
-        });
-      }
-
-      // 4. Update Debt
-      if (typeof result.new_debt === 'number' && !isNaN(result.new_debt)) {
-        appState.creditDebt = Math.max(0, result.new_debt);
-        changesApplied++;
-        appliedNotes.push(`Долг установлен: ${formatMoney(appState.creditDebt)} ₽`);
-      }
-
-      // 5. Update Days
-      if (typeof result.new_days === 'number' && !isNaN(result.new_days)) {
-        appState.daysSalary = Math.max(1, Math.round(result.new_days));
-        changesApplied++;
-        appliedNotes.push(`Дней до ЗП: ${appState.daysSalary}`);
+        }
       }
 
       // Save & Update Dashboard
       if (changesApplied > 0) {
         saveData();
+        // Invalidate AI cache on financial changes
+        aiAnalysisCache.lastUpdate = null;
+        await getProactiveAiAnalysis();
         renderDashboard();
         triggerHaptic('success');
-        showToast(appliedNotes.slice(0, 2).join(' | '), 'success');
+        showToast(appliedNotes.slice(0, 3).join(' • '), 'success');
       }
 
-      // Handle message / QA response from AI
-      if (result.message && result.message.trim() !== '') {
-        displayAiResponse(result.message);
+      // Display AI response
+      if (result.ai_response && result.ai_response.trim() !== '') {
+        displayAiResponse(result.ai_response);
         triggerHaptic('light');
+        
+        // Save to conversation history
+        conversationHistory.push(
+          { role: 'user', content: text },
+          { role: 'assistant', content: result.ai_response }
+        );
+        
+        // Keep only last MAX_HISTORY_LENGTH messages (5 exchanges = 10 messages)
+        if (conversationHistory.length > MAX_HISTORY_LENGTH) {
+          conversationHistory = conversationHistory.slice(-MAX_HISTORY_LENGTH);
+        }
       } else if (changesApplied === 0) {
-        displayAiResponse('Понял ваш запрос, но не нашел финансовых параметров (суммы, дней или вопросов). Попробуйте уточнить.');
+        displayAiResponse('Понял ваш запрос, но не нашел финансовых действий. Попробуйте уточнить.');
       }
 
       elements.naturalInput.value = '';
@@ -693,12 +1492,16 @@
 
   function setLoading(isLoading) {
     elements.sendBtn.disabled = isLoading;
+    document.body.classList.toggle('ai-calculating', isLoading);
     if (isLoading) {
       elements.sendIcon.classList.add('hidden');
       elements.loadingSpinner.classList.remove('hidden');
+      if (elements.dailyFoodAmount) elements.dailyFoodAmount.textContent = '…';
+      if (elements.heroSubtext) elements.heroSubtext.textContent = 'ИИ анализирует баланс, долги и резерв…';
     } else {
       elements.sendIcon.classList.remove('hidden');
       elements.loadingSpinner.classList.add('hidden');
+      renderDashboard();
     }
   }
 
@@ -812,6 +1615,53 @@
         showToast('История операций очищена', 'info');
       }
     });
+
+    // Event delegation for cell action buttons
+    if (elements.cellsContainer) {
+      elements.cellsContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('.cell-action-btn');
+        if (!btn) return;
+
+        const action = btn.getAttribute('data-action');
+        const cellId = btn.getAttribute('data-cell-id');
+
+        if (!action || !cellId) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        switch (action) {
+          case 'add':
+            addToCellPrompt(cellId);
+            break;
+          case 'withdraw':
+            withdrawFromCellPrompt(cellId);
+            break;
+          case 'delete':
+            deleteCellConfirm(cellId);
+            break;
+        }
+      });
+    }
+
+    // Cell Action Modal handlers
+    elements.closeCellActionBtn.addEventListener('click', closeCellActionModal);
+    elements.cancelCellActionBtn.addEventListener('click', closeCellActionModal);
+    elements.confirmCellActionBtn.addEventListener('click', confirmCellAction);
+    
+    // Close modal on background click
+    elements.cellActionModal.addEventListener('click', (e) => {
+      if (e.target === elements.cellActionModal) {
+        closeCellActionModal();
+      }
+    });
+
+    // Submit on Enter key
+    elements.cellActionAmountInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        confirmCellAction();
+      }
+    });
   }
 
   // Set Telegram User Details
@@ -826,6 +1676,198 @@
     }
   }
 
+  // Welcome message for first-time users
+  function showWelcomeMessage() {
+    const hasSeenWelcome = localStorage.getItem('smart_budget_welcome_seen');
+    
+    if (!hasSeenWelcome) {
+      const userName = tg?.initDataUnsafe?.user?.first_name || 'Друг';
+      
+      const welcomeMessage = `👋 Привет, ${userName}!
+
+🎉 Добро пожаловать в Smart Budget — ваш умный финансовый помощник!
+
+Я помогу вам:
+💰 Управлять бюджетом через простой чат
+🏦 Создавать финансовые ячейки (вклады, копилки, долги)
+📊 Анализировать расходы и доходы
+💡 Получать умные советы по финансам
+
+🚀 Для начала работы:
+1️⃣ Откройте настройки ⚙️ и добавьте API-ключ
+2️⃣ Напишите: "Пришла зарплата 50000, до зарплаты 14 дней"
+3️⃣ Создайте ячейки: "Создай вклад 20000 под 18%"
+
+💬 Попробуйте команды:
+• "Купил продукты 1200"
+• "Копилка на iPhone 80000"
+• "На сколько дней хватит денег?"
+
+Удачи! 💪`;
+
+      displayAiResponse(welcomeMessage);
+      localStorage.setItem('smart_budget_welcome_seen', 'true');
+      triggerHaptic('success');
+    }
+  }
+
+  // Payment reminders checker
+  function checkPaymentReminders() {
+    const today = new Date();
+    const currentDay = today.getDate();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+
+    // Get reminder check key for today
+    const checkKey = `reminder_checked_${currentYear}_${currentMonth}_${currentDay}`;
+    const alreadyChecked = sessionStorage.getItem(checkKey);
+
+    // Only check once per day
+    if (alreadyChecked) return;
+
+    const upcomingPayments = [];
+
+    // Check DEBT and SUBSCRIPTION cells with dayOfMonth
+    appState.cells.forEach(cell => {
+      if ((cell.type === 'DEBT' || cell.type === 'SUBSCRIPTION') && cell.dayOfMonth > 0) {
+        const daysUntilPayment = cell.dayOfMonth - currentDay;
+        
+        // Remind if payment is today, tomorrow, or in 3 days
+        if (daysUntilPayment >= 0 && daysUntilPayment <= 3) {
+          upcomingPayments.push({
+            title: cell.title,
+            amount: cell.amount,
+            day: cell.dayOfMonth,
+            daysLeft: daysUntilPayment,
+            type: cell.type
+          });
+        }
+      }
+    });
+
+    // Show reminders if any
+    if (upcomingPayments.length > 0) {
+      let reminderText = '🔔 Напоминание о платежах:\n\n';
+      
+      upcomingPayments.forEach(payment => {
+        const emoji = payment.type === 'DEBT' ? '💳' : '📱';
+        const dayText = payment.daysLeft === 0 ? 'СЕГОДНЯ' : 
+                       payment.daysLeft === 1 ? 'завтра' : 
+                       `через ${payment.daysLeft} дня`;
+        
+        reminderText += `${emoji} ${payment.title}\n`;
+        reminderText += `💰 Сумма: ${formatMoney(payment.amount)}\n`;
+        reminderText += `📅 Оплата: ${dayText} (${payment.day} числа)\n\n`;
+      });
+
+      reminderText += '💡 Не забудьте подготовить средства для оплаты!';
+
+      displayAiResponse(reminderText);
+      triggerHaptic('notification');
+      
+      // Mark as checked for today
+      sessionStorage.setItem(checkKey, 'true');
+    }
+  }
+
+  // =========================================================================
+  // 9. Proactive AI Analysis
+  // =========================================================================
+  
+  let aiAnalysisCache = {
+    debtRecommendation: null,
+    foodBudgetAdvice: null,
+    foodBudgetAmount: null,
+    lastUpdate: null
+  };
+  let proactiveAnalysisLoading = false;
+
+  async function getProactiveAiAnalysis() {
+    // Skip if no API key or analyzed recently (cache 5 min)
+    if (!appState.apiKey || !appState.apiKey.trim()) return;
+    
+    const now = Date.now();
+    if (aiAnalysisCache.lastUpdate && (now - aiAnalysisCache.lastUpdate) < 300000) {
+      return aiAnalysisCache; // Use cache
+    }
+
+    proactiveAnalysisLoading = true;
+    renderDashboard();
+    try {
+      const allCells = appState.cells || [];
+      const debtCells = allCells.filter(c => c.type === 'DEBT');
+      const totalDebt = debtCells.reduce((sum, c) => sum + c.amount, 0);
+      
+      // Only analyze if there are debts OR if balance is low
+      if (totalDebt === 0 && appState.currentBalance > 1000) {
+        aiAnalysisCache = {
+          debtRecommendation: null,
+          foodBudgetAdvice: `ИИ рассчитывает бюджет питания на ${appState.daysSalary} дн.`,
+          foodBudgetAmount: Math.min(appState.currentBalance, Math.round(appState.currentBalance * 0.35)),
+          lastUpdate: now
+        };
+        return aiAnalysisCache;
+      }
+
+      const prompt = `Ты финансовый советник. Проанализируй ситуацию и дай персональные рекомендации. Не используй фиксированные проценты: рассчитай их сам из баланса, долгов, обязательных платежей и времени до зарплаты.
+
+📊 ФИНАНСОВАЯ СИТУАЦИЯ:
+• Баланс: ${formatMoney(appState.currentBalance)} ₽
+• Дней до зарплаты: ${appState.daysSalary} дн.
+• Всего долгов: ${formatMoney(totalDebt)} ₽
+${debtCells.length > 0 ? '• Долги:\n' + debtCells.map(d => `  - ${d.title}: ${formatMoney(d.amount)} ₽`).join('\n') : ''}
+
+💡 ЗАДАЧА: Рассчитай:
+1. Сумму и процент баланса для погашения долга (только если долг есть), оставив реалистичный резерв до зарплаты. Учитывай ${appState.daysSalary} дней и дневной бюджет на еду. При положительном балансе и долге не возвращай 0 ₽: предложи посильную положительную сумму.
+2. Умеренный общий бюджет на еду до зарплаты и дневной лимит. Не закладывай 500 ₽ в день автоматически: используй экономный реалистичный бюджет и учитывай, что продукты могут уже быть дома.
+
+Формат ответа (только текст, без JSON):
+ДОЛГ: [сумма] ₽ ([процент]% баланса) — [обоснование]
+ЕДА: [общая сумма] ₽ на ${appState.daysSalary} дн. ([дневной лимит] ₽/день)`;
+
+      const response = await fetch(appState.apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${appState.apiKey}`
+        },
+        body: JSON.stringify({
+          model: appState.apiModel,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.7,
+          max_tokens: 100
+        })
+      });
+
+      if (!response.ok) throw new Error('AI unavailable');
+
+      const data = await response.json();
+      const aiResponse = data.choices?.[0]?.message?.content?.trim() || '';
+      
+      // Parse response
+      const lines = aiResponse.split('\n');
+      let debtLine = lines.find(l => l.startsWith('ДОЛГ:'))?.replace('ДОЛГ:', '').trim();
+      let foodLine = lines.find(l => l.startsWith('ЕДА:'))?.replace('ЕДА:', '').trim();
+      const foodMatch = foodLine?.match(/([\d\s]+)\s*₽/);
+      const foodAmount = foodMatch ? Number(foodMatch[1].replace(/\s/g, '')) : appState.currentBalance;
+      
+      aiAnalysisCache = {
+        debtRecommendation: totalDebt > 0 ? (debtLine || 'Рекомендую погасить часть долга') : null,
+        foodBudgetAdvice: foodLine || `ИИ: ~${Math.round(foodAmount / Math.max(1, appState.daysSalary))} ₽/день`,
+        foodBudgetAmount: Math.min(appState.currentBalance, Math.max(0, foodAmount)),
+        lastUpdate: now
+      };
+      
+      return aiAnalysisCache;
+      
+    } catch (error) {
+      console.error('Proactive AI analysis failed:', error);
+      return aiAnalysisCache; // Return old cache or null
+    } finally {
+      proactiveAnalysisLoading = false;
+    }
+  }
+
   // =========================================================================
   // 10. Bootstrap App
   // =========================================================================
@@ -834,6 +1876,13 @@
     setupEventListeners();
     await loadData();
     renderDashboard();
+    
+    // Get proactive AI analysis
+    await getProactiveAiAnalysis();
+    renderDashboard(); // Re-render with AI recommendations
+    
+    showWelcomeMessage();
+    checkPaymentReminders();
   }
 
   // Run on DOM loaded
